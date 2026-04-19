@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import re
@@ -139,10 +140,59 @@ def is_bot_mentioned(message: str) -> bool:
 # ================== Логика ==================
 memory = load_memory()
 history = memory.get('history', [])
+last_reply = 0
 print(f'✅ История загружена ({len(history)} сообщений)')
 print(f'📝 Последний собеседник: {memory.get("last_user") or "(none)"}')
 print(f'🔇 Тихий режим: {SILENT_ERRORS}')
 print(f'🔗 Ollama URL: {OLLAMA_URL}')
+print(f'📸 Режим видео: Vision (анализ изображений)')
+
+
+def ask_ollama_vision(image_frame, prompt_text: str = "Опиши, что ты видишь на этом изображении. Ответь коротко на русском.") -> str | None:
+    """Отправляет кадр как изображение в Ollama для анализа (vision mode).
+    
+    Ожидает image_frame в RGB формате.
+    """
+    try:
+        import cv2
+    except ImportError:
+        print('[⚠️] OpenCV не установлен')
+        return None
+    
+    try:
+        # imencode работает ТОЛЬКО с BGR форматом для JPG
+        # Конвертируем RGB -> BGR перед кодированием
+        frame_bgr = cv2.cvtColor(image_frame, cv2.COLOR_RGB2BGR)
+        _, buffer = cv2.imencode('.jpg', frame_bgr)
+        image_base64 = base64.b64encode(buffer).decode('utf-8')
+        
+        r = requests.post(
+            f'{OLLAMA_URL}/api/generate',
+            json={
+                'model': MODEL,
+                'prompt': prompt_text,
+                'images': [image_base64],
+                'stream': False,
+            },
+            timeout=30,
+        )
+        
+        if r.status_code != 200:
+            print(f'[⚠️ ОШИБКА] Ollama вернул {r.status_code}')
+            return None
+        
+        data = r.json()
+        answer = data.get('response', '').strip()
+        if not answer:
+            print('[⚠️ ОШИБКА] Ollama вернул пустой ответ')
+            return None
+        return answer
+    except requests.RequestException as exc:
+        print(f'[⚠️ ОШИБКА] Ollama недоступен: {exc}')
+        return None
+    except Exception as exc:
+        print(f'[⚠️ ОШИБКА] Ошибка отправки изображения: {exc}')
+        return None
 
 
 def ask_ollama(user: str, text: str) -> str | None:
@@ -214,6 +264,9 @@ class TwitchIrcBot:
         self.audio_task = None
         self.video_stop = asyncio.Event()
         self.audio_stop = asyncio.Event()
+        self.screenshot_enabled = False
+        self.screenshot_dir = BASE_DIR / 'screenshots'
+        self.screenshot_dir.mkdir(exist_ok=True)
 
     async def connect(self):
         self.reader, self.writer = await asyncio.open_connection('irc.chat.twitch.tv', 6667)
@@ -237,28 +290,64 @@ class TwitchIrcBot:
         self.send_raw(f'PRIVMSG #{channel} :{message.replace(chr(10), " ")}')
 
     async def _capture_video(self, device_index: int):
+        """Захватывает весь экран и анализирует его через Ollama."""
         try:
+            import mss
+            import numpy as np
             import cv2
         except ImportError:
-            print('[⚠️] OpenCV не установлен. Установите opencv-python.')
+            print('[⚠️] Требуются пакеты: mss, numpy, opencv-python')
+            print('Установите: pip install mss numpy opencv-python')
             return
-        cap = cv2.VideoCapture(device_index)
-        if not cap.isOpened():
-            print(f'[⚠️] Не удалось открыть видеоустройство #{device_index}')
-            return
-        print(f'🎥 Захват видео с устройства #{device_index} запущен')
+
+        print(f'🖥️ Захват экрана запущен')
+        if self.screenshot_enabled:
+            print(f'📸 Скриншоты сохраняются в: {self.screenshot_dir}')
+
         frame_count = 0
-        while not self.video_stop.is_set():
-            ok, frame = await asyncio.to_thread(cap.read)
-            if not ok:
-                print('[⚠️] Не удалось получить кадр из видеоустройства')
-                break
-            frame_count += 1
-            if frame_count % 30 == 0:
-                print(f'[🎥] Получено {frame_count} кадров')
-            await asyncio.sleep(0.03)
-        await asyncio.to_thread(cap.release)
-        print(f'🎥 Остановка захвата видео (всего кадров: {frame_count})')
+        try:
+            with mss.mss() as sct:
+                monitor = sct.monitors[1]  # Первый монитор
+                print(f'🖥️ Размер экрана: {monitor["width"]}x{monitor["height"]}')
+                
+                while not self.video_stop.is_set():
+                    # Захватываем экран (mss возвращает RGBA)
+                    screenshot = sct.grab(monitor)
+                    frame_rgba = np.array(screenshot)
+                    # Конвертируем RGBA -> RGB (убираем альфа, сохраняем натуральные цвета)
+                    frame_rgb = cv2.cvtColor(frame_rgba, cv2.COLOR_RGBA2RGB)
+                    
+                    frame_count += 1
+                    
+                    # Сохраняем скриншот если включено
+                    if self.screenshot_enabled and frame_count % 5 == 0:
+                        try:
+                            timestamp = int(time.time() * 1000) % 1000000
+                            filename = self.screenshot_dir / f'frame_{frame_count}_{timestamp}.jpg'
+                            # imwrite ожидает BGR, конвертируем из RGB
+                            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                            await asyncio.to_thread(cv2.imwrite, str(filename), frame_bgr)
+                        except Exception as e:
+                            print(f'[⚠️] Ошибка сохранения скриншота: {e}')
+                    
+                    # Отправляем RGB кадр в Ollama каждые 10 кадров
+                    if frame_count % 10 == 0:
+                        print(f'[🖥️] Анализ кадра #{frame_count}...')
+                        response = await asyncio.to_thread(ask_ollama_vision, frame_rgb, "Кратко опиши что происходит на экране. Только на русском.")
+                        if response:
+                            print(f'[👁️ Ollama]: {response}')
+                        else:
+                            print('[🖥️] Ollama не ответил')
+                    
+                    if frame_count % 30 == 0:
+                        print(f'[🖥️] Обработано {frame_count} кадров')
+                    
+                    await asyncio.sleep(0.1)  # Минимальная задержка для снижения нагрузки
+        
+        except Exception as e:
+            print(f'[⚠️] Ошибка захвата экрана: {e}')
+        
+        print(f'🖥️ Остановка захвата экрана (всего кадров: {frame_count})')
 
     async def _capture_audio(self, device_index: int):
         try:
@@ -375,7 +464,7 @@ class TwitchIrcBot:
         print()
 
     async def console_loop(self):
-        print('Console commands: join <channel>, part <channel>, memory [N], msg <channel> <text>, start_video [device], stop_video, start_audio [device], stop_audio, devices, list, channels, quit')
+        print('Console commands: join <channel>, part <channel>, memory [N], msg <channel> <text>, start_video, stop_video, start_audio [device], stop_audio, screenshot_on/off, clear_screenshots, devices, list, channels, quit')
         loop = asyncio.get_running_loop()
         while True:
             try:
@@ -446,6 +535,23 @@ class TwitchIrcBot:
                     await self.audio_task
                 else:
                     print('Audio capture is not running')
+            elif cmd == 'screenshot_on':
+                self.screenshot_enabled = True
+                print(f'📸 Сохранение скриншотов включено: {self.screenshot_dir}')
+            elif cmd == 'screenshot_off':
+                self.screenshot_enabled = False
+                print('📸 Сохранение скриншотов отключено')
+            elif cmd == 'clear_screenshots':
+                try:
+                    import shutil
+                    if self.screenshot_dir.exists():
+                        shutil.rmtree(self.screenshot_dir)
+                        self.screenshot_dir.mkdir(exist_ok=True)
+                        print('📸 Папка скриншотов очищена')
+                    else:
+                        print('📸 Папка скриншотов не существует')
+                except Exception as e:
+                    print(f'[⚠️] Ошибка при очистке: {e}')
             elif cmd in ('quit', 'exit'):
                 print('Stopping bot...')
                 if self.writer:
@@ -453,7 +559,7 @@ class TwitchIrcBot:
                     await self.writer.wait_closed()
                 break
             else:
-                print('Unknown command. Use: join, part, list, msg, memory, start_video, stop_video, start_audio, stop_audio, devices, channels, quit')
+                print('Unknown command. Use: join, part, list, msg, memory, start_video, stop_video, start_audio, stop_audio, screenshot_on, screenshot_off, clear_screenshots, devices, channels, quit')
 
     async def run(self):
         await self.connect()
