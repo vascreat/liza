@@ -4,7 +4,10 @@ from liza_bot.config import *
 from liza_bot.memory.bot_memory import memory_manager
 
 class ollama_connect:
-
+    """
+    Talk to the model and manage fallback responses.
+    
+    """
     def __init__(self, bot_memory=None, twitch_bot=None):
         self.botMemory = bot_memory or memory_manager()
         self.memory = self.botMemory.memory
