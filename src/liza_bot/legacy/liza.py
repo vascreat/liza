@@ -631,7 +631,7 @@ import time
 from pathlib import Path
 import requests
 
-from config import *
+from liza_bot.config import *
 
 # Global variable to track last reply time
 last_reply = 0

@@ -1,7 +1,7 @@
 import asyncio
-from bot_memory import memory_manager
-from ollama_connect import ollama_connect
-from twitch_irc_bot import TwitchIrcBot
+from liza_bot.llm.ollama_connect import ollama_connect
+from liza_bot.memory.bot_memory import memory_manager
+from liza_bot.twitch.irc_bot import TwitchIrcBot
 
 class BotController:
     def __init__(self):

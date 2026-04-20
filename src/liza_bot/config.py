@@ -2,8 +2,10 @@ import os
 from pathlib import Path
 
 
-BASE_DIR = Path(__file__).parent
-ENV_FILE = BASE_DIR / '.env'
+PACKAGE_DIR = Path(__file__).resolve().parent
+SRC_DIR = PACKAGE_DIR.parent
+PROJECT_ROOT = SRC_DIR.parent
+ENV_FILE = PROJECT_ROOT / '.env'
 
 def load_env(path: Path):
     if not path.exists():
@@ -24,7 +26,7 @@ def load_env(path: Path):
 
 load_env(ENV_FILE)
 
-MEMORY_FILE = BASE_DIR / 'bot_memory.json'
+MEMORY_FILE = PROJECT_ROOT / 'data' / 'bot_memory.json'
 MAX_HISTORY_SIZE = 50
 
 # Loads the Twitch bot token from the environment variable TWITCH_TOKEN. If not set, uses an empty string. Removes any leading/trailing spaces.

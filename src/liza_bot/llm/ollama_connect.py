@@ -1,6 +1,7 @@
-from config import *
 import requests
-from bot_memory import memory_manager
+
+from liza_bot.config import *
+from liza_bot.memory.bot_memory import memory_manager
 
 class ollama_connect:
 

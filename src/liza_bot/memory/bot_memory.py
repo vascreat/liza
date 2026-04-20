@@ -1,6 +1,7 @@
 import json
-from config import *
 import time
+
+from liza_bot.config import *
 
 # MEMORY_FILE = BASE_DIR / 'bot_memory.json'
 # MAX_HISTORY_SIZE = 50
