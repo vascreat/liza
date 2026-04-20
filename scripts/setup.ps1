@@ -4,11 +4,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ScriptsDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot = Split-Path -Parent $ScriptsDir
 $VenvPath = Join-Path $ProjectRoot '.venv'
 $RequirementsPath = Join-Path $ProjectRoot 'requirements.txt'
-$EnvExamplePath = Join-Path $ProjectRoot 'env.exemple'
+$EnvExamplePath = Join-Path $ProjectRoot 'config\env.example'
 $EnvPath = Join-Path $ProjectRoot '.env'
+$PyProjectPath = Join-Path $ProjectRoot 'pyproject.toml'
 
 function Write-Step {
     param([string]$Message)
@@ -63,6 +65,14 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Failed to install Python dependencies.'
 }
 
+if (Test-Path $PyProjectPath) {
+    Write-Step 'Installing project in editable mode'
+    & $PythonExe -m pip install -e $ProjectRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to install the project package.'
+    }
+}
+
 if (-not (Test-Path $EnvPath)) {
     if (Test-Path $EnvExamplePath) {
         Write-Step 'Creating .env from env.exemple'
@@ -79,4 +89,4 @@ Write-Host ''
 Write-Host 'Next steps:'
 Write-Host "1. Edit $EnvPath and fill in your Twitch credentials if needed."
 Write-Host '2. Make sure Ollama is installed and your model already exists.'
-Write-Host "3. Run the bot with: $PythonExe main.py"
+Write-Host "3. Run the bot with: $PythonExe -m liza_bot.main"

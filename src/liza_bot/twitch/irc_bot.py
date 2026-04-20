@@ -1,7 +1,8 @@
 import asyncio
 import time
-from config import *
-from bot_memory import memory_manager
+
+from liza_bot.config import *
+from liza_bot.memory.bot_memory import memory_manager
 
 class TwitchIrcBot:
     def __init__(self, bot_memory=None, ollama=None):
