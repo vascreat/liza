@@ -3,17 +3,10 @@ import time
 
 from liza_bot.config import *
 
-# MEMORY_FILE = BASE_DIR / 'bot_memory.json'
-# MAX_HISTORY_SIZE = 50
-
-# self.memory = load_memory()
-# history = self.memory.get('history', [])
-# print(f'✅ История загружена ({len(history)} сообщений)')
-# print(f'📝 Последний собеседник: {self.memory.get("last_user") or "(none)"}')
-# print(f'🔇 Тихий режим: {SILENT_ERRORS}')
-# print(f'🔗 Ollama URL: {OLLAMA_URL}')
-
 class memory_manager:
+    """
+    Manages bot memory
+    """
     
     def __init__(self):
         self.memory = self.load_memory()
