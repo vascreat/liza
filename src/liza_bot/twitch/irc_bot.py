@@ -6,8 +6,10 @@ from liza_bot.memory.bot_memory import memory_manager
 
 class TwitchIrcBot:
     """
+    
+    twitch_SR ==> TwitchSpeechRecognizer instance for speech recognition (optional)
     """
-    def __init__(self, bot_memory=None, ollama=None):
+    def __init__(self, bot_memory=None, ollama=None, twitch_SR=None):
         self.reader = None
         self.writer = None
         self.channels = []
@@ -19,7 +21,8 @@ class TwitchIrcBot:
 
         self.bot_memory = bot_memory or memory_manager()
         self.ollama = ollama
-
+        self.twitch_speech_recognizer = twitch_SR
+        
     async def connect(self):
         self.reader, self.writer = await asyncio.open_connection('irc.chat.twitch.tv', 6667)
         self.send_raw(f'PASS {TWITCH_TOKEN}')
@@ -41,49 +44,49 @@ class TwitchIrcBot:
             channel = self.channels[0]
         self.send_raw(f'PRIVMSG #{channel} :{message.replace(chr(10), " ")}')
 
-    async def _capture_video(self, device_index: int):
-        try:
-            import cv2
-        except ImportError:
-            print('[⚠️] OpenCV is not installed. Please install opencv-python.')
-            return
-        cap = cv2.VideoCapture(device_index)
-        if not cap.isOpened():
-            print(f'[⚠️] Failed to open video device #{device_index}')
-            return
-        print(f'🎥 Video capture from device #{device_index} started')
-        while not self.video_stop.is_set():
-            ok, frame = await asyncio.to_thread(cap.read)
-            if not ok:
-                print('[⚠️] Failed to get frame from video device')
-                break
-            print(f'[🎥] Frame: {frame.shape}')
-            await asyncio.sleep(0.03)
-        await asyncio.to_thread(cap.release)
-        print('🎥 Video capture stopped')
+    # async def _capture_video(self, device_index: int):
+    #     try:
+    #         import cv2
+    #     except ImportError:
+    #         print('[⚠️] OpenCV is not installed. Please install opencv-python.')
+    #         return
+    #     cap = cv2.VideoCapture(device_index)
+    #     if not cap.isOpened():
+    #         print(f'[⚠️] Failed to open video device #{device_index}')
+    #         return
+    #     print(f'🎥 Video capture from device #{device_index} started')
+    #     while not self.video_stop.is_set():
+    #         ok, frame = await asyncio.to_thread(cap.read)
+    #         if not ok:
+    #             print('[⚠️] Failed to get frame from video device')
+    #             break
+    #         print(f'[🎥] Frame: {frame.shape}')
+    #         await asyncio.sleep(0.03)
+    #     await asyncio.to_thread(cap.release)
+    #     print('🎥 Video capture stopped')
 
-    async def _capture_audio(self, device_index: int):
-        try:
-            import sounddevice as sd
-        except ImportError:
-            print('[⚠️] sounddevice is not installed. Please install sounddevice.')
-            return
+    # async def _capture_audio(self, device_index: int):
+    #     try:
+    #         import sounddevice as sd
+    #     except ImportError:
+    #         print('[⚠️] sounddevice is not installed. Please install sounddevice.')
+    #         return
 
-        def callback(indata, frames, time_info, status):
-            if status:
-                print(f'[⚠️] Audio status: {status}')
-            print(f'[🎙️] Audio: {indata.shape[0]} samples')
-            if self.audio_stop.is_set():
-                raise sd.CallbackStop()
+    #     def callback(indata, frames, time_info, status):
+    #         if status:
+    #             print(f'[⚠️] Audio status: {status}')
+    #         print(f'[🎙️] Audio: {indata.shape[0]} samples')
+    #         if self.audio_stop.is_set():
+    #             raise sd.CallbackStop()
 
-        try:
-            with sd.InputStream(device=device_index, channels=1, callback=callback):
-                print(f'🎙️ Audio capture from device #{device_index} started')
-                while not self.audio_stop.is_set():
-                    await asyncio.sleep(0.2)
-        except Exception as exc:
-            print(f'[⚠️] Audio capture error: {exc}')
-        print('🎙️ Audio capture stopped')
+    #     try:
+    #         with sd.InputStream(device=device_index, channels=1, callback=callback):
+    #             print(f'🎙️ Audio capture from device #{device_index} started')
+    #             while not self.audio_stop.is_set():
+    #                 await asyncio.sleep(0.2)
+    #     except Exception as exc:
+    #         print(f'[⚠️] Audio capture error: {exc}')
+    #     print('🎙️ Audio capture stopped')
 
     def _parse_device_index(self, text: str | None, default: int = 0) -> int:
         if not text:
@@ -133,7 +136,7 @@ class TwitchIrcBot:
         return None
 
     async def console_loop(self):
-        print('Console commands: join <channel>, part <channel>, memory [N], msg <channel> <text>, start_video [device], stop_video, start_audio [device], stop_audio, list, channels, quit')
+        print('Console commands: join <channel>, part <channel>, memory [N], msg <channel> <text>, start_video [device], stop_video, start_audio <channe>, stop_audio, list, channels, quit')
         loop = asyncio.get_running_loop()
         while True:
             try:
@@ -145,6 +148,7 @@ class TwitchIrcBot:
                 continue
             parts = line.strip().split(' ', 2)
             cmd = parts[0].lower()
+
             if cmd == 'join' and len(parts) >= 2:
                 channel = self.ollama.parse_channel_name(parts[1])
                 if channel in self.channels:
@@ -153,6 +157,7 @@ class TwitchIrcBot:
                 self.channels.append(channel)
                 self.send_raw(f'JOIN #{channel}')
                 print(f'Joined #{channel}')
+
             elif cmd == 'part' and len(parts) >= 2:
                 channel = self.ollama.parse_channel_name(parts[1])
                 if channel not in self.channels:
@@ -189,19 +194,45 @@ class TwitchIrcBot:
                     await self.video_task
                 else:
                     print('Video capture is not running')
+
+
+            # Starts the audio recognizer task if not already running
             elif cmd == 'start_audio':
-                device_index = self._parse_device_index(parts[1] if len(parts) >= 2 else None)
-                if self.audio_task and not self.audio_task.done():
-                    print('Audio capture already running')
+                channel = self.ollama.parse_channel_name(parts[1])
+                if hasattr(self, 'audio_recognizer_task') and self.audio_recognizer_task and not self.audio_recognizer_task.done():
+                    print(f'Audio capture already running on {channel}')
                     continue
-                self.audio_stop.clear()
-                self.audio_task = asyncio.create_task(self._capture_audio(device_index))
+                if not self.twitch_speech_recognizer:
+                    from liza_bot.audio.twitch_speech_to_text import TwitchSpeechRecognizer
+                    self.twitch_speech_recognizer = TwitchSpeechRecognizer(channel)
+
+                async def listen_for_trigger():
+                    await self.twitch_speech_recognizer.start()
+                    print(f'Audio capture started on #{channel}')
+                    while True:
+                        text = await self.twitch_speech_recognizer.get_text()
+                        if text and "лиза" in text.lower():
+                            print(f"Trigger word detected: {text}")
+                            if self.ollama:
+                                await asyncio.to_thread(self.ollama.ask_ollama, "user", text, f"{channel}:user")
+
+                self.audio_recognizer_task = asyncio.create_task(listen_for_trigger())
+
+
+            # Stops the audio recognizer task if running
             elif cmd == 'stop_audio':
-                if self.audio_task and not self.audio_task.done():
-                    self.audio_stop.set()
-                    await self.audio_task
+                if hasattr(self, 'audio_recognizer_task') and self.audio_recognizer_task and not self.audio_recognizer_task.done():
+                    if self.twitch_speech_recognizer:
+                        self.twitch_speech_recognizer.stop()
+                    self.audio_recognizer_task.cancel()
+                    try:
+                        await self.audio_recognizer_task
+                    except asyncio.CancelledError:
+                        pass
+                    print('Audio capture stopped')
                 else:
                     print('Audio capture is not running')
+
             elif cmd in ('quit', 'exit'):
                 print('Stopping bot...')
                 if self.writer:

@@ -2,6 +2,7 @@ import asyncio
 from liza_bot.llm.ollama_connect import ollama_connect
 from liza_bot.memory.bot_memory import memory_manager
 from liza_bot.twitch.irc_bot import TwitchIrcBot
+from liza_bot.audio.twitch_speech_to_text import TwitchSpeechRecognizer
 
 class BotController:
     def __init__(self):
@@ -11,8 +12,11 @@ class BotController:
         # Instances an instance of the ollama_connect class
         self.ollama = ollama_connect(bot_memory=self.memory_manager)
 
+        # Instances an instance of the TwitchSpeechRecognizer class
+        self.twitch_speech_recognizer = TwitchSpeechRecognizer(channel="your_channel_name")
+
         # Instances an instance of the TwitchIrcBot class
-        self.twitch_bot = TwitchIrcBot(bot_memory=self.memory_manager, ollama=self.ollama)
+        self.twitch_bot = TwitchIrcBot(bot_memory=self.memory_manager, ollama=self.ollama, twitch_SR=self.twitch_speech_recognizer)
 
         # 
         self.twitch_bot.ollama = self.ollama
