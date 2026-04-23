@@ -14,9 +14,9 @@ class memory_manager:
         self.conversation_histories = self.memory.get('conversation_histories', {})
 
         
-        print(f'✅ История загружена ({len(self.history)} сообщений)')
-        print(f'📝 Последний собеседник: {self.memory.get("last_user") or "(none)"}')
-        print(f'🔇 Тихий режим: {SILENT_ERRORS}')
+        print(f'✅ History loaded ({len(self.history)} messages)')
+        print(f'📝 Last conversation: {self.memory.get("last_user") or "(none)"}')
+        print(f'🔇 Silent errors: {SILENT_ERRORS}')
         print(f'🔗 Ollama URL: {OLLAMA_URL}')
 
     def load_memory(self):
@@ -44,7 +44,7 @@ class memory_manager:
                         'conversation_histories': {},
                     }
             except Exception as exc:
-                print(f'[⚠️] Ошибка при загрузке памяти: {exc}')
+                print(f'[⚠️] Error loading memory: {exc}')
         return {'history': [], 'last_user': None, 'interlocutors': [], 'switches': [], 'conversation_histories': {}}
 
 
@@ -63,7 +63,7 @@ class memory_manager:
             self.history = self.memory['history']
             self.conversation_histories = self.memory['conversation_histories']
         except Exception as exc:
-            print(f'[⚠️] Ошибка при сохранении памяти: {exc}')
+            print(f'[⚠️] Error saving memory: {exc}')
 
 
     def update_conversation_memory(self,user):
@@ -88,7 +88,7 @@ class memory_manager:
 
     def append_exchange(self, conversation_key, user, text, answer):
         user_line = f'{user}: {text}'
-        bot_line = f'Бот: {answer}'
+        bot_line = f'Bot: {answer}'
         self.history.append(user_line)
         self.history.append(bot_line)
         scoped_history = self.get_history(conversation_key)
@@ -101,20 +101,20 @@ class memory_manager:
 
     def show_memory(self, count=10):
         if not self.history:
-            print('📝 Память пуста')
+            print('📝 Memory is empty')
             return
 
-        print(f'📝 Последний собеседник: {self.memory.get("last_user") or "нет"}')
+        print(f'📝 Last interlocutor: {self.memory.get("last_user") or "none"}')
         if self.memory.get('interlocutors'):
-            print(f'📝 Ники в памяти: {", ".join(self.memory.get("interlocutors", []))}')
+            print(f'📝 Nicknames in memory: {", ".join(self.memory.get("interlocutors", []))}')
         if self.memory.get('switches'):
-            print('📝 Переключения между собеседниками:')
+            print('📝 Switches between interlocutors:')
             for sw in self.memory['switches'][-5:]:
                 when = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(sw['when']))
                 print(f'  {when}: {sw["from"]} -> {sw["to"]}')
 
         recent = self.history[-count * 2:]
-        print(f'\n📝 === ПОСЛЕДНИЕ {len(recent) // 2} ЗАПРОСОВ ===')
+        print(f'\n📝 === LAST {len(recent) // 2} REQUESTS ===')
         for i in range(0, len(recent), 2):
             if i + 1 < len(recent):
                 print(f'{recent[i]}\n{recent[i+1]}\n')

@@ -5,6 +5,8 @@ from liza_bot.config import *
 from liza_bot.memory.bot_memory import memory_manager
 
 class TwitchIrcBot:
+    """
+    """
     def __init__(self, bot_memory=None, ollama=None):
         self.reader = None
         self.writer = None
@@ -43,45 +45,45 @@ class TwitchIrcBot:
         try:
             import cv2
         except ImportError:
-            print('[⚠️] OpenCV не установлен. Установите opencv-python.')
+            print('[⚠️] OpenCV is not installed. Please install opencv-python.')
             return
         cap = cv2.VideoCapture(device_index)
         if not cap.isOpened():
-            print(f'[⚠️] Не удалось открыть видеоустройство #{device_index}')
+            print(f'[⚠️] Failed to open video device #{device_index}')
             return
-        print(f'🎥 Захват видео с устройства #{device_index} запущен')
+        print(f'🎥 Video capture from device #{device_index} started')
         while not self.video_stop.is_set():
             ok, frame = await asyncio.to_thread(cap.read)
             if not ok:
-                print('[⚠️] Не удалось получить кадр из видеоустройства')
+                print('[⚠️] Failed to get frame from video device')
                 break
-            print(f'[🎥] Кадр: {frame.shape}')
+            print(f'[🎥] Frame: {frame.shape}')
             await asyncio.sleep(0.03)
         await asyncio.to_thread(cap.release)
-        print('🎥 Остановка захвата видео')
+        print('🎥 Video capture stopped')
 
     async def _capture_audio(self, device_index: int):
         try:
             import sounddevice as sd
         except ImportError:
-            print('[⚠️] sounddevice не установлен. Установите sounddevice.')
+            print('[⚠️] sounddevice is not installed. Please install sounddevice.')
             return
 
         def callback(indata, frames, time_info, status):
             if status:
                 print(f'[⚠️] Audio status: {status}')
-            print(f'[🎙️] Аудио: {indata.shape[0]} сэмплов')
+            print(f'[🎙️] Audio: {indata.shape[0]} samples')
             if self.audio_stop.is_set():
                 raise sd.CallbackStop()
 
         try:
             with sd.InputStream(device=device_index, channels=1, callback=callback):
-                print(f'🎙️ Захват аудио с устройства #{device_index} запущен')
+                print(f'🎙️ Audio capture from device #{device_index} started')
                 while not self.audio_stop.is_set():
                     await asyncio.sleep(0.2)
         except Exception as exc:
-            print(f'[⚠️] Ошибка захвата аудио: {exc}')
-        print('🎙️ Остановка захвата аудио')
+            print(f'[⚠️] Audio capture error: {exc}')
+        print('🎙️ Audio capture stopped')
 
     def _parse_device_index(self, text: str | None, default: int = 0) -> int:
         if not text:
