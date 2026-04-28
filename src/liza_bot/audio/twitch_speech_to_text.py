@@ -77,7 +77,7 @@ class TwitchSpeechRecognizer:
             "-reconnect_streamed", "1",
             "-reconnect_delay_max", "5",
             "-i", stream_url,
-            "-f", "wav",
+            "-f", "s16le",
             "-acodec", "pcm_s16le",
             "-ac", "1",
             "-ar", "16000",
