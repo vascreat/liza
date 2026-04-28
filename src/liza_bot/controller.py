@@ -12,13 +12,10 @@ class BotController:
         # Instances an instance of the ollama_connect class
         self.ollama = ollama_connect(bot_memory=self.memory_manager)
 
-        # Instances an instance of the TwitchSpeechRecognizer class
-        self.twitch_speech_recognizer = TwitchSpeechRecognizer(channel="your_channel_name")
-
         # Instances an instance of the TwitchIrcBot class
-        self.twitch_bot = TwitchIrcBot(bot_memory=self.memory_manager, ollama=self.ollama, twitch_SR=self.twitch_speech_recognizer)
+        self.twitch_bot = TwitchIrcBot(bot_memory=self.memory_manager, ollama=self.ollama)
 
-        # 
+        
         self.twitch_bot.ollama = self.ollama
         self.ollama.twitchBot = self.twitch_bot
 

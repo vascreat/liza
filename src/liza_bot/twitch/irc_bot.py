@@ -3,13 +3,12 @@ import time
 
 from liza_bot.config import *
 from liza_bot.memory.bot_memory import memory_manager
+from liza_bot.audio.twitch_speech_to_text import TwitchSpeechRecognizer
 
 class TwitchIrcBot:
+    """    
     """
-    
-    twitch_SR ==> TwitchSpeechRecognizer instance for speech recognition (optional)
-    """
-    def __init__(self, bot_memory=None, ollama=None, twitch_SR=None):
+    def __init__(self, bot_memory=None, ollama=None):
         self.reader = None
         self.writer = None
         self.channels = []
@@ -21,19 +20,139 @@ class TwitchIrcBot:
 
         self.bot_memory = bot_memory or memory_manager()
         self.ollama = ollama
-        self.twitch_speech_recognizer = twitch_SR
+        self.twitch_speech_recognizer = None
+        self.audio_recognizer_task = None
         
+    async def console_loop(self):
+        print('Console commands: join <channel>, part <channel>, memory [N], msg <channel> <text>, start_video [device], stop_video, start_audio <channe>, stop_audio, list, channels, quit')
+        loop = asyncio.get_running_loop()
+        
+        while True:
+            try:
+                line = await loop.run_in_executor(None, input, '> ')
+            except (EOFError, KeyboardInterrupt):
+                print('Console input closed')
+                break
+            if not line:
+                continue
+            parts = line.strip().split(' ', 2)
+            cmd = parts[0].lower()
+
+            match cmd:
+                # Joins the specified Twitch channel
+                case 'join' if len(parts) >= 2:
+                    channel = self.parse_channel_name(parts[1])
+                    if channel in self.channels:
+                        print(f'Already in {channel}')
+                        continue
+                    self.channels.append(channel)
+                    self.send_raw(f'JOIN #{channel}')
+                    print(f'Joined #{channel}')
+
+                # Parts the specified Twitch channel
+                case 'part' if len(parts) >= 2:
+                    channel = self.parse_channel_name(parts[1])
+                    if channel not in self.channels:
+                        print(f'Not in {channel}')
+                        continue
+                    self.send_raw(f'PART #{channel}')
+                    self.channels.remove(channel)
+                    print(f'Parted #{channel}')
+
+                case 'list' | 'channels':
+                    print('Channels:', ', '.join(self.channels) if self.channels else '(none)')
+
+                case 'memory' | 'history':
+                    count = 10
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        count = int(parts[1])
+                    self.bot_memory.show_memory(count)
+
+                case 'msg' if len(parts) >= 3:
+                    target = self.parse_channel_name(parts[1])
+                    text = parts[2].strip()
+                    if target not in self.channels:
+                        print(f'Not joined to {target}')
+                        continue
+                    await self.send_message(text, channel=target)
+                    print(f'Sent to #{target}: {text}')
+
+                case 'start_video':
+                    device_index = self._parse_device_index(parts[1] if len(parts) >= 2 else None)
+                    if self.video_task and not self.video_task.done():
+                        print('Video capture already running')
+                        continue
+                    self.video_stop.clear()
+                    self.video_task = asyncio.create_task(self._capture_video(device_index))
+
+                case 'stop_video':
+                    if self.video_task and not self.video_task.done():
+                        self.video_stop.set()
+                        await self.video_task
+                    else:
+                        print('Video capture is not running')
+
+                # Starts the audio recognizer task if not already running
+                case 'start_audio' if len(parts) >= 2:
+                    channel = self.parse_channel_name(parts[1])
+                    if self.audio_recognizer_task and not self.audio_recognizer_task.done():
+                        print(f'Audio capture already running on {channel}')
+                        continue
+
+                    if not self.twitch_speech_recognizer:
+                        self.twitch_speech_recognizer = TwitchSpeechRecognizer(channel)
+
+                    elif not self.twitch_speech_recognizer.channel:
+                        self.twitch_speech_recognizer.channel = channel
+
+                    async def listen_for_trigger():
+                        await self.twitch_speech_recognizer.start()
+                        print(f'Audio capture started on #{channel}')
+                        while True:
+                            text = await self.twitch_speech_recognizer.get_text()
+                            if text:
+                                print(f'[{channel}] {text}')
+
+                    self.audio_recognizer_task = asyncio.create_task(listen_for_trigger())
+
+                # Stops the audio recognizer task if running
+                case 'stop_audio':
+                    if self.audio_recognizer_task and not self.audio_recognizer_task.done():
+                        if self.twitch_speech_recognizer:
+                            self.twitch_speech_recognizer.stop()
+                        self.audio_recognizer_task.cancel()
+                        try:
+                            await self.audio_recognizer_task
+                        except asyncio.CancelledError:
+                            pass
+                        print('Audio capture stopped')
+                    else:
+                        print('Audio capture is not running')
+
+                case 'quit' | 'exit':
+                    print('Stopping bot...')
+                    if self.writer:
+                        self.writer.close()
+                        await self.writer.wait_closed()
+                    break
+
+                case _:
+                    print('Unknown command. Use: join, part, list, msg, memory, start_video, stop_video, start_audio, stop_audio, channels, quit')
+    
+    
+    def parse_channel_name(self, text: str) -> str:
+        return text.strip().lstrip('#').lower()
+
     async def connect(self):
+        """
+        Connects to Twitch IRC and performs the initial handshake. After connecting, it starts the console loop in a background task.
+        """
         self.reader, self.writer = await asyncio.open_connection('irc.chat.twitch.tv', 6667)
+        # Sends the authentication and capability request messages to Twitch IRC
         self.send_raw(f'PASS {TWITCH_TOKEN}')
         self.send_raw(f'NICK {BOT_NICK}')
         self.send_raw('CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership')
         print('✅ Connected to Twitch IRC. Use console command join <channel> to connect to channels.')
-
-    def send_raw(self, message: str):
-        if not self.writer:
-            return
-        self.writer.write((message + '\r\n').encode('utf-8'))
 
     async def send_message(self, message: str, channel: str | None = None):
         if not self.writer:
@@ -44,57 +163,54 @@ class TwitchIrcBot:
             channel = self.channels[0]
         self.send_raw(f'PRIVMSG #{channel} :{message.replace(chr(10), " ")}')
 
-    # async def _capture_video(self, device_index: int):
-    #     try:
-    #         import cv2
-    #     except ImportError:
-    #         print('[⚠️] OpenCV is not installed. Please install opencv-python.')
-    #         return
-    #     cap = cv2.VideoCapture(device_index)
-    #     if not cap.isOpened():
-    #         print(f'[⚠️] Failed to open video device #{device_index}')
-    #         return
-    #     print(f'🎥 Video capture from device #{device_index} started')
-    #     while not self.video_stop.is_set():
-    #         ok, frame = await asyncio.to_thread(cap.read)
-    #         if not ok:
-    #             print('[⚠️] Failed to get frame from video device')
-    #             break
-    #         print(f'[🎥] Frame: {frame.shape}')
-    #         await asyncio.sleep(0.03)
-    #     await asyncio.to_thread(cap.release)
-    #     print('🎥 Video capture stopped')
+        
+    def send_raw(self, message: str):
+        if not self.writer:
+            return
+        self.writer.write((message + '\r\n').encode('utf-8'))
 
-    # async def _capture_audio(self, device_index: int):
-    #     try:
-    #         import sounddevice as sd
-    #     except ImportError:
-    #         print('[⚠️] sounddevice is not installed. Please install sounddevice.')
-    #         return
+    async def run(self):
+        # Waits for the connection to Twitch IRC to be established, then starts the console loop and processes incoming messages in a loop. It handles PING messages, parses PRIVMSG for user messages, checks if the bot is mentioned, and uses the ollama instance to generate replies.
+        await self.connect()
+        asyncio.create_task(self.console_loop())
+        while True:
+            line = await self.reader.readline()
+            if not line:
+                print('Connection closed by server')
+                break
+            text = line.decode('utf-8', errors='ignore').strip()
+            if not text:
+                continue
+            formatted_line = self._format_irc_line(text)
+            if formatted_line:
+                print(formatted_line)
+            if text.startswith('PING'):
+                self.send_raw('PONG :tmi.twitch.tv')
+                continue
+            parsed = self.parse_privmsg(text)
+            if parsed[0] is None:
+                continue
+            user, channel, message = parsed
+            if user.lower() == BOT_NICK:
+                continue
+            if self.ollama is None:
+                continue
+            if not self.bot_memory.is_bot_mentioned(message):
+                continue
 
-    #     def callback(indata, frames, time_info, status):
-    #         if status:
-    #             print(f'[⚠️] Audio status: {status}')
-    #         print(f'[🎙️] Audio: {indata.shape[0]} samples')
-    #         if self.audio_stop.is_set():
-    #             raise sd.CallbackStop()
-
-    #     try:
-    #         with sd.InputStream(device=device_index, channels=1, callback=callback):
-    #             print(f'🎙️ Audio capture from device #{device_index} started')
-    #             while not self.audio_stop.is_set():
-    #                 await asyncio.sleep(0.2)
-    #     except Exception as exc:
-    #         print(f'[⚠️] Audio capture error: {exc}')
-    #     print('🎙️ Audio capture stopped')
-
-    def _parse_device_index(self, text: str | None, default: int = 0) -> int:
-        if not text:
-            return default
-        try:
-            return int(text)
-        except ValueError:
-            return default
+            conversation_key = self._conversation_key(channel, user)
+            now = time.time()
+            last_reply = self.last_reply_by_conversation.get(conversation_key, 0.0)
+            if now - last_reply < COOLDOWN:
+                continue
+            self.last_reply_by_conversation[conversation_key] = now
+            self.bot_memory.update_conversation_memory(user)
+            print(f'{user}@{channel}: {message}')
+            reply = await asyncio.to_thread(self.ollama.ask_ollama, user, message, conversation_key)
+            if reply is not None:
+                reply = reply[:MAX_LEN]
+                await asyncio.sleep(1)
+                await self.send_message(reply, channel=channel)
 
     def _conversation_key(self, channel: str, user: str) -> str:
         return f'{channel.lower()}:{user.lower()}'
@@ -135,153 +251,7 @@ class TwitchIrcBot:
 
         return None
 
-    async def console_loop(self):
-        print('Console commands: join <channel>, part <channel>, memory [N], msg <channel> <text>, start_video [device], stop_video, start_audio <channe>, stop_audio, list, channels, quit')
-        loop = asyncio.get_running_loop()
-        while True:
-            try:
-                line = await loop.run_in_executor(None, input, '> ')
-            except (EOFError, KeyboardInterrupt):
-                print('Console input closed')
-                break
-            if not line:
-                continue
-            parts = line.strip().split(' ', 2)
-            cmd = parts[0].lower()
 
-            if cmd == 'join' and len(parts) >= 2:
-                channel = self.ollama.parse_channel_name(parts[1])
-                if channel in self.channels:
-                    print(f'Already in {channel}')
-                    continue
-                self.channels.append(channel)
-                self.send_raw(f'JOIN #{channel}')
-                print(f'Joined #{channel}')
-
-            elif cmd == 'part' and len(parts) >= 2:
-                channel = self.ollama.parse_channel_name(parts[1])
-                if channel not in self.channels:
-                    print(f'Not in {channel}')
-                    continue
-                self.send_raw(f'PART #{channel}')
-                self.channels.remove(channel)
-                print(f'Parted #{channel}')
-            elif cmd in ('list', 'channels'):
-                print('Channels:', ', '.join(self.channels) if self.channels else '(none)')
-            elif cmd in ('memory', 'history'):
-                count = 10
-                if len(parts) >= 2 and parts[1].isdigit():
-                    count = int(parts[1])
-                self.bot_memory.show_memory(count)
-            elif cmd == 'msg' and len(parts) >= 3:
-                target = self.ollama.parse_channel_name(parts[1])
-                text = parts[2].strip()
-                if target not in self.channels:
-                    print(f'Not joined to {target}')
-                    continue
-                await self.send_message(text, channel=target)
-                print(f'Sent to #{target}: {text}')
-            elif cmd == 'start_video':
-                device_index = self._parse_device_index(parts[1] if len(parts) >= 2 else None)
-                if self.video_task and not self.video_task.done():
-                    print('Video capture already running')
-                    continue
-                self.video_stop.clear()
-                self.video_task = asyncio.create_task(self._capture_video(device_index))
-            elif cmd == 'stop_video':
-                if self.video_task and not self.video_task.done():
-                    self.video_stop.set()
-                    await self.video_task
-                else:
-                    print('Video capture is not running')
-
-
-            # Starts the audio recognizer task if not already running
-            elif cmd == 'start_audio':
-                channel = self.ollama.parse_channel_name(parts[1])
-                if hasattr(self, 'audio_recognizer_task') and self.audio_recognizer_task and not self.audio_recognizer_task.done():
-                    print(f'Audio capture already running on {channel}')
-                    continue
-                if not self.twitch_speech_recognizer:
-                    from liza_bot.audio.twitch_speech_to_text import TwitchSpeechRecognizer
-                    self.twitch_speech_recognizer = TwitchSpeechRecognizer(channel)
-
-                async def listen_for_trigger():
-                    await self.twitch_speech_recognizer.start()
-                    print(f'Audio capture started on #{channel}')
-                    while True:
-                        text = await self.twitch_speech_recognizer.get_text()
-                        if text and "лиза" in text.lower():
-                            print(f"Trigger word detected: {text}")
-                            if self.ollama:
-                                await asyncio.to_thread(self.ollama.ask_ollama, "user", text, f"{channel}:user")
-
-                self.audio_recognizer_task = asyncio.create_task(listen_for_trigger())
-
-
-            # Stops the audio recognizer task if running
-            elif cmd == 'stop_audio':
-                if hasattr(self, 'audio_recognizer_task') and self.audio_recognizer_task and not self.audio_recognizer_task.done():
-                    if self.twitch_speech_recognizer:
-                        self.twitch_speech_recognizer.stop()
-                    self.audio_recognizer_task.cancel()
-                    try:
-                        await self.audio_recognizer_task
-                    except asyncio.CancelledError:
-                        pass
-                    print('Audio capture stopped')
-                else:
-                    print('Audio capture is not running')
-
-            elif cmd in ('quit', 'exit'):
-                print('Stopping bot...')
-                if self.writer:
-                    self.writer.close()
-                    await self.writer.wait_closed()
-                break
-            else:
-                print('Unknown command. Use: join, part, list, msg, memory, start_video, stop_video, start_audio, stop_audio, channels, quit')
-
-    async def run(self):
-        await self.connect()
-        asyncio.create_task(self.console_loop())
-        while True:
-            line = await self.reader.readline()
-            if not line:
-                print('Connection closed by server')
-                break
-            text = line.decode('utf-8', errors='ignore').strip()
-            if not text:
-                continue
-            formatted_line = self._format_irc_line(text)
-            if formatted_line:
-                print(formatted_line)
-            if text.startswith('PING'):
-                self.send_raw('PONG :tmi.twitch.tv')
-                continue
-            parsed = self.parse_privmsg(text)
-            if parsed[0] is None:
-                continue
-            user, channel, message = parsed
-            if user.lower() == BOT_NICK:
-                continue
-            if self.ollama is None:
-                continue
-            if not self.bot_memory.is_bot_mentioned(message):
-                continue
-            conversation_key = self._conversation_key(channel, user)
-            now = time.time()
-            last_reply = self.last_reply_by_conversation.get(conversation_key, 0.0)
-            if now - last_reply < COOLDOWN:
-                continue
-            self.last_reply_by_conversation[conversation_key] = now
-            self.bot_memory.update_conversation_memory(user)
-            print(f'{user}@{channel}: {message}')
-            reply = await asyncio.to_thread(self.ollama.ask_ollama, user, message, conversation_key)
-            if reply is not None:
-                reply = reply[:MAX_LEN]
-                await asyncio.sleep(1)
-                await self.send_message(reply, channel=channel)
 
     def parse_privmsg(self, text: str):
         if 'PRIVMSG' not in text:

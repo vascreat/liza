@@ -2,10 +2,8 @@
 
 
 import subprocess
-import sys
 import asyncio
 import speech_recognition as sr
-import streamlink
 from colorama import Fore, Back, Style
 
 
@@ -14,7 +12,7 @@ class TwitchSpeechRecognizer:
     A class to capture and transcribe Twitch stream audio in real-time using streamlink, ffmpeg and Google's speech recognition API.
     
     """
-    def __init__(self, channel):
+    def __init__(self, channel: str | None = None):
         self.channel = channel
         self.recognizer = sr.Recognizer()
         self.sample_rate = 16000
@@ -26,15 +24,20 @@ class TwitchSpeechRecognizer:
         self._stop_event = asyncio.Event()
         self._task = None
         self.text_queue: asyncio.Queue[str] = asyncio.Queue()
+        self.last_error: str | None = None
 
     async def start(self):
         """
         Async function to start the recognizer as an async background task.
         """
         self._stop_event.clear()
+        self.last_error = None
         stream_url = self.get_stream_url()
         if not stream_url:
-            print("[Speech] No stream URL found.")
+            if self.last_error:
+                print(f"[Speech] {self.last_error}")
+            else:
+                print("[Speech] No stream URL found.")
             return
         self.start_ffmpeg(stream_url)
         self._task = asyncio.create_task(self._run_pipeline())
@@ -60,11 +63,52 @@ class TwitchSpeechRecognizer:
         """
         gets the audio-only stream URL for the specified Twitch channel using streamlink.
         """
+        try:
+            import streamlink
+        except ImportError as exc:
+            # Some Windows policies block lxml DLLs used by python streamlink.
+            fallback_url = self._get_stream_url_via_cli()
+            if fallback_url:
+                return fallback_url
+            if not self.last_error:
+                self.last_error = f"streamlink is unavailable: {exc}"
+            return None
+
         streams = streamlink.streams(f"https://www.twitch.tv/{self.channel}")
         if "audio_only" not in streams:
-            print("No audio_only stream available.")
+            self.last_error = "No audio_only stream available."
             return None
         return streams["audio_only"].url
+
+    def _get_stream_url_via_cli(self) -> str | None:
+        """Fallback path that uses streamlink CLI when python import is blocked."""
+        if not self.channel:
+            self.last_error = "No channel configured for audio capture."
+            return None
+
+        command = [
+            "streamlink",
+            "--stream-url",
+            f"https://www.twitch.tv/{self.channel}",
+            "audio_only",
+        ]
+
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=20)
+        except Exception as exc:
+            self.last_error = f"streamlink CLI failed: {exc}"
+            return None
+
+        if result.returncode != 0:
+            stderr_text = (result.stderr or "").strip()
+            self.last_error = stderr_text or "streamlink CLI did not return an audio stream URL."
+            return None
+
+        url = (result.stdout or "").strip().splitlines()
+        if not url:
+            self.last_error = "streamlink CLI returned an empty stream URL."
+            return None
+        return url[0]
 
     def start_ffmpeg(self, stream_url):
 
